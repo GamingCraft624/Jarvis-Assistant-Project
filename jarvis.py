@@ -1,24 +1,31 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
+from timezonefinder import TimezoneFinder
+from datetime import datetime
+from geopy.geocoders import Nominatim
 import requests
 import os
 import subprocess
 import webbrowser
 import speech_recognition as sr
 import psutil
+import pytz
+from dotenv import load_dotenv
+load_dotenv()
 
 
 # === SET YOUR API KEYS ===
-os.environ["GOOGLE_API_KEY"] = "Gemini API KEY"
-os.environ["TAVILY_API_KEY"] = "Tavily API KEY" 
-WEATHER_API_KEY = "Weather API KEY"
+google_key = os.getenv("GOOGLE_API_KEY")
+tavily_key = os.getenv("TAVILY_API_KEY")
+weather_key = os.getenv("WEATHER_API_KEY")
+
 
 # === Load Gemini LLM ===
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
 
 # === Weather Tool ===
 def get_weather(city):
-    url = f"http://api.weatherapi.com/v1/current.json?key={WEATHER_API_KEY}&q={city}&aqi=no"
+    url = f"http://api.weatherapi.com/v1/current.json?key={weather_key}&q={city}&aqi=no"
     try:
         response = requests.get(url)
         if response.status_code != 200:
@@ -30,6 +37,27 @@ def get_weather(city):
         return f"The weather in {city} is {condition} with {temp_c}°C (feels like {feels_like}°C)."
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+# === World Time Tool ===
+
+def get_time_in_city(city_name):
+    try:
+        geolocator = Nominatim(user_agent="jarvis-time-bot")
+        location = geolocator.geocode(city_name)
+        if not location:
+            return f"Couldn't find the city '{city_name}', sir."
+
+        tf = TimezoneFinder()
+        timezone_str = tf.timezone_at(lat=location.latitude, lng=location.longitude)
+        if not timezone_str:
+            return f"Couldn't determine the timezone for '{city_name}'."
+
+        tz = pytz.timezone(timezone_str)
+        local_time = datetime.now(tz).strftime("%I:%M %p")
+        return f"The local time in {city_name.title()} is {local_time}, sir."
+    except Exception as e:
+        return f"Error getting time for {city_name}: {str(e)}"
 
 # === Smart Open ===
 def smart_open(query):
@@ -71,6 +99,15 @@ def handle_system_commands(query):
     elif "rickroll" in query:
         webbrowser.open("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         return "Never gonna give you up, sir."
+
+    elif any(word in query for word in ["what time", "current time", "time is it", "tell me the time"]):
+        from datetime import datetime
+        now = datetime.now().strftime("%I:%M %p")
+        return f"The current time is {now}, sir."
+
+    elif "time in" in query:
+        city = query.split("time in")[-1].strip()
+        return get_time_in_city(city)
 
 
     return None
@@ -122,24 +159,30 @@ while True:
     else:
         query = user_input
 
-    if query.lower() in ("exit", "quit"):
+        query_lower = query.lower()
+
+    if query_lower in ("exit", "quit"):
         print("Jarvis: Shutting down. Stay smart 😎")
         break
 
     # Check for system commands
-    sys_response = handle_system_commands(query)
+    sys_response = handle_system_commands(query_lower)
     if sys_response:
         response = sys_response
 
     # Weather check
-    elif "weather in" in query.lower():
+    elif "weather in" in query_lower:
         city = query.split("weather in")[-1].strip()
         response = get_weather(city)
 
     # Battery Check
-    elif any(word in query.lower() for word in ["battery", "power level", "charge", "power status", "energy level"]):
+    elif any(word in query_lower for word in ["battery", "power level", "charge", "power status", "energy level"]):
         response = get_battery_status()
 
+    # Time Check
+    elif "time in" in query_lower:
+        city = query_lower.split("time in")[-1].strip()
+        response = get_time_in_city(city)
 
 
 
