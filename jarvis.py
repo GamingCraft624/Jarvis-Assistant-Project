@@ -186,7 +186,7 @@ while True:
 
 
 
-    # Fallback to Gemini
+    # Fallback to Gemini (Falls back to gemini to give output)
     else:
         response = llm.invoke([HumanMessage(content=query)]).content
 
