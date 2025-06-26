@@ -1,194 +1,194 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
-from timezonefinder import TimezoneFinder
-from datetime import datetime
-from geopy.geocoders import Nominatim
-import requests
 import os
-import subprocess
+import json
+import requests
 import webbrowser
-import speech_recognition as sr
+import subprocess
+import re
 import psutil
 import pytz
+import speech_recognition as sr
+from datetime import datetime
+from timezonefinder import TimezoneFinder
+from geopy.geocoders import Nominatim
 from dotenv import load_dotenv
+
+from tavily import TavilyClient
+from groq import Groq
+
+# === Load API Keys ===
 load_dotenv()
-
-
-# === SET YOUR API KEYS ===
-google_key = os.getenv("GOOGLE_API_KEY")
-tavily_key = os.getenv("TAVILY_API_KEY")
 weather_key = os.getenv("WEATHER_API_KEY")
+tavily_key = os.getenv("TAVILY_API_KEY")
+groq_key = os.getenv("GROQ_API_KEY")
 
+# === Memory ===
+MEMORY_FILE = "jarvis_memory.json"
 
-# === Load Gemini LLM ===
-llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
+def load_memory():
+    if os.path.exists(MEMORY_FILE):
+        with open(MEMORY_FILE, "r") as f:
+            return json.load(f)
+    return {"natural": [], "structured": {}}
 
-# === Weather Tool ===
+def save_memory(memory):
+    with open(MEMORY_FILE, "w") as f:
+        json.dump(memory, f, indent=2)
+
+memory = load_memory()
+
+# === Groq LLM ===
+client = Groq(api_key=groq_key)
+
+def ask_llm(prompt):
+    chat_completion = client.chat.completions.create(
+        model="llama3-70b-8192",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return chat_completion.choices[0].message.content.strip()
+
+# === Intent Detection for Structured Memory ===
+def extract_structured_facts(text):
+    structured = {}
+    patterns = {
+        "name": [r"my name is (\w+)", r"i am (\w+)", r"this is (\w+)"],
+        "favorite_color": [r"my favourite color is (\w+)", r"i like the color (\w+)"],
+        "hobby": [r"my hobby is (.+)", r"i enjoy (.+)", r"i love (.+)"],
+    }
+
+    text = text.lower()
+    for key, regex_list in patterns.items():
+        for pattern in regex_list:
+            match = re.search(pattern, text)
+            if match:
+                structured[key] = match.group(1).strip()
+                break
+    return structured
+
+# === Answer from Structured Memory ===
+def answer_from_structured(query):
+    patterns = {
+        "favorite_color": [r"(?i)what(?:'s| is)? my favorite color", r"(?i)do you know.*color.*like"],
+        "name": [r"(?i)what(?:'s| is)? my name", r"(?i)who am i", r"(?i)do you know my name"],
+        "hobby": [r"(?i)what(?:'s| is)? my hobby", r"(?i)what do i enjoy"],
+    }
+
+    for key, regex_list in patterns.items():
+        for pattern in regex_list:
+            if re.search(pattern, query, re.IGNORECASE):
+                if key in memory["structured"]:
+                    return f"Your {key.replace('_', ' ')} is {memory['structured'][key]}."
+    return None
+
+# === Weather ===
 def get_weather(city):
     url = f"http://api.weatherapi.com/v1/current.json?key={weather_key}&q={city}&aqi=no"
     try:
-        response = requests.get(url)
-        if response.status_code != 200:
-            return f"Sorry, couldn't fetch weather for {city} (status code {response.status_code})."
-        data = response.json()
-        condition = data['current']['condition']['text']
-        temp_c = data['current']['temp_c']
-        feels_like = data['current']['feelslike_c']
-        return f"The weather in {city} is {condition} with {temp_c}°C (feels like {feels_like}°C)."
-    except Exception as e:
-        return f"Error: {str(e)}"
+        r = requests.get(url)
+        data = r.json()["current"]
+        return f"{city.title()}: {data['condition']['text']}, {data['temp_c']}°C (Feels like {data['feelslike_c']}°C)"
+    except:
+        return "Sorry, I couldn't fetch the weather."
 
+# === Battery ===
+def get_battery():
+    battery = psutil.sensors_battery()
+    if not battery:
+        return "Battery info unavailable."
+    status = "charging" if battery.power_plugged else "not charging"
+    return f"Battery is at {battery.percent}%, {status}."
 
-# === World Time Tool ===
-
-def get_time_in_city(city_name):
+# === World Time ===
+def get_time_in(city):
     try:
-        geolocator = Nominatim(user_agent="jarvis-time-bot")
-        location = geolocator.geocode(city_name)
-        if not location:
-            return f"Couldn't find the city '{city_name}', sir."
+        geo = Nominatim(user_agent="jarvis")
+        loc = geo.geocode(city)
+        tz = TimezoneFinder().timezone_at(lat=loc.latitude, lng=loc.longitude)
+        now = datetime.now(pytz.timezone(tz)).strftime("%I:%M %p")
+        return f"Local time in {city.title()} is {now}"
+    except:
+        return "Couldn't get the time."
 
-        tf = TimezoneFinder()
-        timezone_str = tf.timezone_at(lat=location.latitude, lng=location.longitude)
-        if not timezone_str:
-            return f"Couldn't determine the timezone for '{city_name}'."
-
-        tz = pytz.timezone(timezone_str)
-        local_time = datetime.now(tz).strftime("%I:%M %p")
-        return f"The local time in {city_name.title()} is {local_time}, sir."
-    except Exception as e:
-        return f"Error getting time for {city_name}: {str(e)}"
-
-# === Smart Open ===
+# === Tavily Smart Search ===
 def smart_open(query):
-    from tavily import TavilyClient
-
-    search_query = query.lower().replace("open", "").strip()
-    try:
-        print(f"🔎 Searching for: {search_query}")
-        client = TavilyClient()
-        results = client.search(query=search_query, max_results=1)
-        if results and "results" in results and len(results["results"]) > 0:
-            top_link = results["results"][0]["url"]
-            webbrowser.open(top_link)
-            return f"Opening {search_query}..."
-        else:
-            return f"Couldn't find a link for '{search_query}'."
-    except Exception as e:
-        return f"Error searching: {str(e)}"
-
-# === System Commands ===
-def handle_system_commands(query):
-    query = query.lower()
-
-    if "open youtube" in query:
-        webbrowser.open("https://www.youtube.com")
-        return "Opening YouTube..."
-
-    elif "launch firefox" in query or "open firefox" in query:
-        subprocess.Popen(["firefox"])
-        return "Launching Firefox..."
-
-    elif "open google" in query:
-        webbrowser.open("https://www.google.com")
-        return "Opening Google..."
-
-    elif query.startswith("open "):
-        return smart_open(query)
-
-    elif "rickroll" in query:
-        webbrowser.open("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-        return "Never gonna give you up, sir."
-
-    elif any(word in query for word in ["what time", "current time", "time is it", "tell me the time"]):
-        from datetime import datetime
-        now = datetime.now().strftime("%I:%M %p")
-        return f"The current time is {now}, sir."
-
-    elif "time in" in query:
-        city = query.split("time in")[-1].strip()
-        return get_time_in_city(city)
-
-
-    return None
+    client = TavilyClient(api_key=tavily_key)
+    results = client.search(query=query, max_results=1)
+    if results["results"]:
+        url = results["results"][0]["url"]
+        webbrowser.open(url)
+        return f"Opening: {url}"
+    return "No results found."
 
 # === Voice Input ===
-def listen_to_voice():
-    recognizer = sr.Recognizer()
+def listen():
+    r = sr.Recognizer()
     with sr.Microphone() as source:
-        print("🎤 Listening for 5 seconds...")
-        recognizer.adjust_for_ambient_noise(source, duration=0.5)
-        audio = recognizer.listen(source, phrase_time_limit=5)
-    try:
-        query = recognizer.recognize_google(audio)
-        print(f"You (voice): {query}")
-        return query
-    except sr.UnknownValueError:
-        print("❌ Couldn't understand, try again.")
-        return ""
-    except sr.RequestError as e:
-        print(f"🔌 Could not request results: {e}")
-        return ""
-#=== Battery Status ===
-def get_battery_status():
-    battery = psutil.sensors_battery()
-    if battery is None:
-        return "I'm unable to access battery information on this device, sir."
-
-    percent = battery.percent
-    plugged = battery.power_plugged
-
-    if plugged:
-        return f"Power level at {percent}%. Currently charging, sir."
-    elif percent < 20:
-        return f"Warning: power at {percent}%. Recommend immediate recharge, sir."
-    else:
-        return f"Battery is at {percent}%. Not charging."
-
+        print("🎤 Listening...")
+        r.adjust_for_ambient_noise(source)
+        audio = r.listen(source, phrase_time_limit=5)
+        try:
+            return r.recognize_google(audio)
+        except:
+            return ""
 
 # === Main Loop ===
-print("🧠 Jarvis Ready. Ask me anything! (Type 'exit' to quit)\n")
+print("🧠 Jarvis is online. Say or type something ('exit' to quit)\n")
+print(extract_structured_facts("my name is sankar"))
 
 while True:
-    user_input = input("You (type or press Enter for voice): ").strip()
+    query = input("You (or press Enter for voice): ").strip()
+    if not query:
+        query = listen()
+    if not query:
+        continue
 
-    if user_input == "":
-        query = listen_to_voice()
-        if not query:
-            continue  # skip if voice input failed
-    else:
-        query = user_input
-
-        query_lower = query.lower()
-
-    if query_lower in ("exit", "quit"):
-        print("Jarvis: Shutting down. Stay smart 😎")
+    query_lower = query.lower()
+    if query_lower in ["exit", "quit"]:
+        print("Jarvis: Goodbye!")
         break
 
-    # Check for system commands
-    sys_response = handle_system_commands(query_lower)
-    if sys_response:
-        response = sys_response
-
-    # Weather check
-    elif "weather in" in query_lower:
+    # === Commands ===
+    if "weather in" in query_lower:
         city = query.split("weather in")[-1].strip()
         response = get_weather(city)
 
-    # Battery Check
-    elif any(word in query_lower for word in ["battery", "power level", "charge", "power status", "energy level"]):
-        response = get_battery_status()
+    elif "battery" in query_lower or "charge" in query_lower:
+        response = get_battery()
 
-    # Time Check
     elif "time in" in query_lower:
-        city = query_lower.split("time in")[-1].strip()
-        response = get_time_in_city(city)
+        city = query.split("time in")[-1].strip()
+        response = get_time_in(city)
 
+    elif query_lower.startswith("open "):
+        response = smart_open(query)
 
+    elif "what do you remember" in query_lower:
+        structured = "\n".join([f"{k.replace('_',' ')}: {v}" for k,v in memory["structured"].items()])
+        natural = "\n".join(["- " + f for f in memory["natural"]])
+        response = f"Here's what I remember:\n\n🔹 Facts:\n{structured or 'None'}\n\n📝 Notes:\n{natural or 'None'}"
 
-    # Fallback to Gemini (Falls back to gemini to give output)
     else:
-        response = llm.invoke([HumanMessage(content=query)]).content
+        # Step 1: Try to respond from structured memory
+        structured_response = answer_from_structured(query)
+        if structured_response:
+            response = structured_response
+        else:
+            # Step 2: Try to extract and store structured info
+            facts = extract_structured_facts(query)
+            if facts:
+                memory["structured"].update(facts)
+                save_memory(memory)
+                response = "Got it. I'll remember that."
+            else:
+                # Step 3: Fallback to natural memory + LLM
+                memory["natural"].append(query)
+                save_memory(memory)
+                context = "\n".join([f"{k}: {v}" for k,v in memory["structured"].items()])
+                prompt = f"""You are Jarvis. The user said: {query}
+
+Here is what you know about them:
+{context}
+
+Respond helpfully and naturally."""
+                response = ask_llm(prompt)
 
     print("Jarvis:", response)
-
