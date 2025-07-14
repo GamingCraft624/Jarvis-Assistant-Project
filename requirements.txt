@@ -1,0 +1,14 @@
+requests
+psutil
+pytz
+SpeechRecognition
+python-dotenv
+geopy
+timezonefinder
+groq
+tavily-python
+sounddevice
+soundfile
+onnx
+onnxruntime
+numpy

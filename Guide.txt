@@ -1,0 +1,25 @@
+# 1. Install dependencies
+sudo apt install python3-venv python3-pip portaudio19-dev ffmpeg libsndfile1
+
+# 2. Set up project
+git clone https://github.com/GamingCraft624/Jarvis-Assistant-Project.git
+cd Jarvis-Assistant-Project
+python3 -m venv jarvis-env
+source jarvis-env/bin/activate
+
+# 3. Install Python packages
+pip install -r requirements.txt
+
+# 4. Install Piper
+git clone https://github.com/rhasspy/piper.git
+cd piper
+pip install .
+
+# 5. Create .env file
+echo "GROQ_API_KEY=your_key" >> .env
+echo "TAVILY_API_KEY=your_key" >> .env
+echo "WEATHER_API_KEY=your_key" >> .env
+
+# 6. Run it
+python3 jarvis.py
+
