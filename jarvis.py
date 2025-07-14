@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 from tavily import TavilyClient
 from groq import Groq
 
+
+
 # === Load API Keys ===
 load_dotenv()
 weather_key = os.getenv("WEATHER_API_KEY")
@@ -148,8 +150,11 @@ def listen():
         except:
             return ""
 
+from tts import speak
+
 # === Main Loop ===
 print("🧠 Jarvis is online. Say or type something ('exit' to quit)\n")
+speak("System online. Hello, Sir.")
 
 while True:
     query = input("You (or press Enter for voice): ").strip()
@@ -201,4 +206,6 @@ while True:
                 response = ask_llm(query)
 
     print("Jarvis:", response)
+    speak(response)
+
     append_history("Jarvis", response)
