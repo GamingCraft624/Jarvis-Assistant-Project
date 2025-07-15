@@ -1,3 +1,4 @@
 .env
 chat_history.txt
 jarvis_memory.json
+__pycache__/
